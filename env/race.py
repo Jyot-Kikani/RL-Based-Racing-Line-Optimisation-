@@ -9,7 +9,7 @@ from env.car    import Car
 from env.reward import compute_reward
 from config import (TRACK_FILE, MAX_SPEED, N_SENSORS,
                     SENSOR_ANGLES, SENSOR_MAX_DIST,
-                    WINDOW_W, WINDOW_H, FPS)
+                    WINDOW_W, WINDOW_H, FPS, HEADLESS)
 
 
 class RacingEnv(gym.Env):
@@ -19,18 +19,21 @@ class RacingEnv(gym.Env):
         super().__init__()
         self.track       = Track(TRACK_FILE)
         self.car         = Car(*self.track.start_pos, self.track.start_heading)
-        self.render_mode = render_mode
+        # Force render_mode off if running headless
+        self.render_mode = None if HEADLESS else render_mode
 
         self.observation_space = spaces.Box(low=-1., high=1., shape=(N_SENSORS+1,), dtype=np.float32)
         self.action_space      = spaces.Box(low=-1., high=1., shape=(2,),           dtype=np.float32)
 
-        self._prev_waypoint = 0
-        self._prev_progress = 0.0
-        self._step_count    = 0
-        self.MAX_STEPS      = 5000
+        self._prev_waypoint       = 0
+        self._prev_progress       = 0.0
+        self._step_count          = 0
+        self._steps_since_last_wp = 0
+        self.MAX_STEPS            = 5000
         self._screen = self._clock = self._font = None
 
-        self._compute_screen_transform()
+        if not HEADLESS:
+            self._compute_screen_transform()
         if self.render_mode == "human":
             self._init_pygame()
 
@@ -58,6 +61,7 @@ class RacingEnv(gym.Env):
         super().reset(seed=seed)
         self.car.reset(*self.track.start_pos, self.track.start_heading)
         self._prev_waypoint = self._prev_progress = self._step_count = 0
+        self._steps_since_last_wp = 0
         return self._get_obs(), {}
 
     def step(self, action):
@@ -67,15 +71,28 @@ class RacingEnv(gym.Env):
         curr_wp       = self.track.nearest_waypoint(self.car.x, self.car.y)
         curr_progress = self.track.progress(self.car.x, self.car.y)
         new_wps       = (curr_wp - self._prev_waypoint) % len(self.track.centerline)
+
+        if new_wps > 0:
+            self._steps_since_last_wp = 0
+        else:
+            self._steps_since_last_wp += 1
+
         reward = compute_reward(on_track, new_wps, self.car.speed,
                                 self._prev_progress, curr_progress)
         self._prev_waypoint = curr_wp
         self._prev_progress = curr_progress
         info = {"speed": self.car.speed, "waypoint": curr_wp,
                 "progress": curr_progress, "on_track": on_track}
+
+        terminated = not on_track
+        if self._steps_since_last_wp > 100:
+            terminated = True
+            reward -= 5.0
+            info["on_track"] = False
+
         if self.render_mode == "human":
             self.render()
-        return self._get_obs(), reward, not on_track, self._step_count >= self.MAX_STEPS, info
+        return self._get_obs(), reward, terminated, self._step_count >= self.MAX_STEPS, info
 
     def _get_obs(self):
         s = self.car.get_sensor_readings(self.track) * 2.0 - 1.0
@@ -93,13 +110,19 @@ class RacingEnv(gym.Env):
             self._font   = pygame.font.SysFont("monospace", 15)
 
     def render(self):
+        if HEADLESS:
+            return
         import pygame
         if self._screen is None:
             self._init_pygame()
 
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+                return
+
         self._screen.fill((20, 20, 30))
 
-        # Track surface
         rb = [self._to_screen(*p) for p in self.track.right_bound]
         lb = [self._to_screen(*p) for p in self.track.left_bound]
         if len(rb) > 2:
@@ -107,12 +130,10 @@ class RacingEnv(gym.Env):
         pygame.draw.lines(self._screen, (210, 210, 210), True, rb, 2)
         pygame.draw.lines(self._screen, (210, 210, 210), True, lb, 2)
 
-        # Centerline dashes
         cl = [self._to_screen(*p) for p in self.track.centerline]
         for i in range(0, len(cl)-1, 5):
             pygame.draw.line(self._screen, (70, 70, 110), cl[i], cl[(i+1) % len(cl)], 1)
 
-        # Sensor rays
         cx, cy = self._to_screen(self.car.x, self.car.y)
         for ang in SENSOR_ANGLES:
             ra   = self.car.heading + math.radians(ang)
@@ -122,17 +143,15 @@ class RacingEnv(gym.Env):
             pygame.draw.line(self._screen, (200, 160, 0), (cx, cy), (esx, esy), 1)
             pygame.draw.circle(self._screen, (255, 220, 0), (esx, esy), 3)
 
-        # Car triangle — sized in pixels so it's always visible
         h, sz = self.car.heading, self._car_px
         pts = [
-            (cx + sz   * math.cos(h),          cy - sz   * math.sin(h)),
-            (cx + sz*.6* math.cos(h + 2.4),    cy - sz*.6* math.sin(h + 2.4)),
-            (cx + sz*.6* math.cos(h - 2.4),    cy - sz*.6* math.sin(h - 2.4)),
+            (cx + sz   * math.cos(h),        cy - sz   * math.sin(h)),
+            (cx + sz*.6* math.cos(h + 2.4),  cy - sz*.6* math.sin(h + 2.4)),
+            (cx + sz*.6* math.cos(h - 2.4),  cy - sz*.6* math.sin(h - 2.4)),
         ]
         pygame.draw.polygon(self._screen, (255, 60, 60), [(int(x), int(y)) for x,y in pts])
         pygame.draw.circle(self._screen, (255, 255, 255), (cx, cy), 3)
 
-        # HUD
         on_track = self.track.is_on_track(self.car.x, self.car.y)
         hud = [
             f"Speed:    {self.car.speed * 3.6:.1f} km/h",
@@ -141,8 +160,8 @@ class RacingEnv(gym.Env):
             f"On track: {on_track}",
         ]
         for i, line in enumerate(hud):
-            col  = (100,255,100) if (i==3 and on_track) else \
-                   (255,100,100) if (i==3 and not on_track) else (200,200,200)
+            col = (100,255,100) if (i==3 and on_track) else \
+                  (255,100,100) if (i==3 and not on_track) else (200,200,200)
             self._screen.blit(self._font.render(line, True, col), (10, 10 + i*20))
 
         pygame.display.flip()

@@ -9,10 +9,10 @@ TRACK_SCALE     = 1.0                        # metres per unit (TUMFTM is alread
 # ── Car physics ───────────────────────────────────────────────────────────────
 WHEELBASE       = 2.5        # metres  (F1 ~3.6 m; keep smaller for stability)
 MAX_STEER       = 0.8        # radians (~28°)
-MAX_ACCEL       = 4.0        # m/s²
-MAX_BRAKE       = 8.0        # m/s²
+MAX_ACCEL       = 15.0       # m/s² (massively bumped to allow snappy acceleration)
+MAX_BRAKE       = 15.0       # m/s²
 MAX_SPEED       = 60.0       # m/s  (~288 km/h)
-FRICTION        = 1.5        # m/s² (baseline rolling resistance / engine braking)
+FRICTION        = 5.5        # m/s² (baseline rolling resistance / engine braking)
 DRAG            = 0.001      # aerodynamic drag coefficient (scales quadratically with speed)
 CORNERING_G     = 2.0        # max lateral G-force (limits turning radius at high speeds)
 TURN_FRICTION   = 10.0        # multiplier for speed scrubbing during turns
@@ -28,6 +28,7 @@ REWARD_MODE           = "checkpoint"   # "checkpoint" | "laptime"
 CHECKPOINT_REWARD     = 1.0
 OFF_TRACK_PENALTY     = -10.0
 SPEED_WEIGHT          = 0.01           # used in laptime mode
+STEP_PENALTY          = 0.01           # penalty per step to encourage movement
 
 # ── Training ──────────────────────────────────────────────────────────────────
 TOTAL_TIMESTEPS = 1_000_000
@@ -36,6 +37,7 @@ N_EVAL_EPISODES = 5
 LEARNING_RATE   = 3e-4
 BATCH_SIZE      = 256
 BUFFER_SIZE     = 1_000_000
+N_ENVS          = 1          # override with --n-envs on cluster
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 MODEL_DIR       = "models/"
@@ -47,3 +49,4 @@ PLOT_DIR        = "outputs/plots/"
 WINDOW_W        = 1000
 WINDOW_H        = 700
 FPS             = 60
+HEADLESS        = False      # set True on cluster via --headless flag

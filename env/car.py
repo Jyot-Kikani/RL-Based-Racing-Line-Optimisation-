@@ -17,7 +17,7 @@ class Car:
         self.x       = float(x)
         self.y       = float(y)
         self.heading = float(heading)
-        self.speed   = 0.0
+        self.speed   = 10.0  # Rolling start — gives the agent immediate forward momentum
 
     # ── Step 3a: bicycle model step ───────────────────────────────────────────
     def step(self, steer: float, accel: float):
