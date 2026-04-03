@@ -28,6 +28,7 @@ from stable_baselines3 import SAC
 from env.race import RacingEnv
 from env.track import Track
 from config import PLOT_DIR
+from train import STAGES
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,10 +126,7 @@ def build_evolution_plot(stage: int, max_ckpts: int = 16, make_gif: bool = False
 
     # Load track once
     import config as cfg
-    stage_tracks = {1: "data/tracks/drag_strip.csv",
-                    2: "data/tracks/drag_strip.csv",
-                    3: "data/tracks/monza.csv"}
-    track = Track(stage_tracks.get(stage, cfg.TRACK_FILE))
+    track = Track(STAGES.get(stage, {}).get("track", cfg.TRACK_FILE))
 
     # ── Rollout all checkpoints ───────────────────────────────────────────────
     all_xs, all_ys, all_speeds, all_titles = [], [], [], []

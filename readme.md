@@ -33,6 +33,9 @@ python visualize.py --trajectory outputs/trajectories/trajectory_ep1.csv
 
 # 5. Run PID baseline for comparison
 python baseline.py
+
+# 6. Create or edit a custom track
+python track_editor.py --file data/tracks/custom_track.csv
 ```
 
 ## Monitor training

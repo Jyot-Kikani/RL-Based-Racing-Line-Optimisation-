@@ -3,7 +3,7 @@
 # Import this everywhere instead of hardcoding values.
 
 # ── Track ─────────────────────────────────────────────────────────────────────
-TRACK_FILE      = "data/tracks/drag_strip.csv"   # path to TUMFTM CSV
+TRACK_FILE      = "data/tracks/f1.csv"   # path to TUMFTM CSV
 TRACK_SCALE     = 1.0                        # metres per unit (TUMFTM is already in m)
 
 # ── Car physics ───────────────────────────────────────────────────────────────
@@ -49,4 +49,5 @@ PLOT_DIR        = "outputs/plots/"
 WINDOW_W        = 1000
 WINDOW_H        = 700
 FPS             = 60
+RENDER_CAMERA_MODE = "full"   # "follow" | "full"
 HEADLESS        = False      # set True on cluster via --headless flag

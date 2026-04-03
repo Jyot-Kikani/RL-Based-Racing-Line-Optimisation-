@@ -9,7 +9,7 @@ from env.car    import Car
 from env.reward import compute_reward
 from config import (TRACK_FILE, MAX_SPEED, N_SENSORS,
                     SENSOR_ANGLES, SENSOR_MAX_DIST,
-                    WINDOW_W, WINDOW_H, FPS, HEADLESS)
+                    WINDOW_W, WINDOW_H, FPS, HEADLESS, RENDER_CAMERA_MODE)
 
 
 class RacingEnv(gym.Env):
@@ -31,6 +31,10 @@ class RacingEnv(gym.Env):
         self._steps_since_last_wp = 0
         self.MAX_STEPS            = 5000
         self._screen = self._clock = self._font = None
+        # Visual-only smoothed state — does NOT affect physics
+        self._render_heading  = None   # smoothed heading for sprite
+        self._render_ray_ends = None   # smoothed ray endpoints (world-space)
+        self._camera_center   = None   # smoothed follow-camera target (world-space)
 
         if not HEADLESS:
             self._compute_screen_transform()
@@ -39,17 +43,56 @@ class RacingEnv(gym.Env):
 
     # ── transform ─────────────────────────────────────────────────────────────
     def _compute_screen_transform(self):
+        if RENDER_CAMERA_MODE == "full":
+            self._compute_full_track_transform()
+            return
+
+        # Fixed local zoom window for the follow camera.
+        # SENSOR_MAX_DIST already defines how far the agent can "see", so we
+        # render a little beyond that to keep the upcoming road readable.
+        pad      = 36
+        view_w_m = SENSOR_MAX_DIST * 2.4
+        view_h_m = view_w_m * (WINDOW_H / WINDOW_W)
+        scale    = min((WINDOW_W - 2 * pad) / max(view_w_m, 1e-6),
+                       (WINDOW_H - 2 * pad) / max(view_h_m, 1e-6))
+        self._scale  = scale
+        self._offset = np.zeros(2, dtype=float)
+        avg_w_m      = float(np.mean(self.track._w_right + self.track._w_left))
+        self._car_px = max(4, int(avg_w_m * scale * 0.4))
+
+    def _compute_full_track_transform(self):
         all_pts = np.vstack([self.track.centerline, self.track.left_bound, self.track.right_bound])
         pad = 60
         mn, mx = all_pts.min(0), all_pts.max(0)
         span   = mx - mn
-        scale  = min((WINDOW_W - 2*pad) / max(span[0], 1e-6),
-                     (WINDOW_H - 2*pad) / max(span[1], 1e-6))
+        scale  = min((WINDOW_W - 2 * pad) / max(span[0], 1e-6),
+                     (WINDOW_H - 2 * pad) / max(span[1], 1e-6))
         self._scale  = scale
-        self._offset = np.array([(WINDOW_W - span[0]*scale)/2 - mn[0]*scale,
-                                 (WINDOW_H - span[1]*scale)/2 - mn[1]*scale])
+        self._offset = np.array([(WINDOW_W - span[0] * scale) / 2 - mn[0] * scale,
+                                 (WINDOW_H - span[1] * scale) / 2 - mn[1] * scale])
         avg_w_m      = float(np.mean(self.track._w_right + self.track._w_left))
         self._car_px = max(4, int(avg_w_m * scale * 0.4))
+
+    def _update_camera_transform(self):
+        if RENDER_CAMERA_MODE == "full":
+            return
+
+        heading = self._render_heading if self._render_heading is not None else self.car.heading
+        lookahead_m = 22.0 + 0.25 * self.car.speed
+        target = np.array([
+            self.car.x + math.cos(heading) * lookahead_m,
+            self.car.y + math.sin(heading) * lookahead_m,
+        ], dtype=float)
+
+        if self._camera_center is None:
+            self._camera_center = target
+        else:
+            self._camera_center += (target - self._camera_center) * 0.12
+
+        self._offset = np.array([
+            WINDOW_W * 0.5 - self._camera_center[0] * self._scale,
+            WINDOW_H * 0.5 - self._camera_center[1] * self._scale,
+        ], dtype=float)
 
     def _to_screen(self, x, y):
         px = int(x * self._scale + self._offset[0])
@@ -62,6 +105,9 @@ class RacingEnv(gym.Env):
         self.car.reset(*self.track.start_pos, self.track.start_heading)
         self._prev_waypoint = self._prev_progress = self._step_count = 0
         self._steps_since_last_wp = 0
+        self._render_heading = None
+        self._render_ray_ends = None
+        self._camera_center = None
         return self._get_obs(), {}
 
     def step(self, action):
@@ -100,14 +146,48 @@ class RacingEnv(gym.Env):
         return np.append(s, v).astype(np.float32)
 
     # ── pygame ────────────────────────────────────────────────────────────────
+    # Supersampling factor: render internally at SSAA× resolution, then
+    # smoothscale down to the window. Eliminates pixel-jitter on sub-pixel motion.
+    # 2 = good quality,  can raise to 3 on fast machines.  1 = off.
+    _SSAA = 1
+
+    # Visual-only heading smoother (EMA).
+    # 0.0 = frozen, 1.0 = no smoothing.  Lower = smoother but more lag.
+    _HEADING_SMOOTH = 0.18
+
     def _init_pygame(self):
         import pygame
         if self._screen is None:
             pygame.init()
-            pygame.display.set_caption("F1 Racing Line RL")
-            self._screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
-            self._clock  = pygame.time.Clock()
-            self._font   = pygame.font.SysFont("monospace", 15)
+            pygame.display.set_caption("F1 Racing Line  \u00b7  RL Agent")
+            self._screen  = pygame.display.set_mode((WINDOW_W, WINDOW_H))
+            self._clock   = pygame.time.Clock()
+            # Fonts stay at display resolution (HUD is blitted post-downscale)
+            self._font_sm = pygame.font.SysFont("monospace", 13)
+            self._font_lg = pygame.font.SysFont("monospace", 17, bold=True)
+            self._font    = self._font_sm
+            # Internal hi-res canvas: all track/car drawing goes here
+            cw = WINDOW_W * self._SSAA
+            ch = WINDOW_H * self._SSAA
+            self._canvas   = pygame.Surface((cw, ch))
+            self._ray_surf = pygame.Surface((cw, ch), pygame.SRCALPHA)
+            # Car sprite — loaded once, rotated each frame via rotozoom
+            import os
+            sprite_path = os.path.normpath(
+                os.path.join(os.path.dirname(__file__), "..", "assets", "mercedes.png")
+            )
+            self._car_sprite = pygame.image.load(sprite_path).convert_alpha()
+
+    # ── drawing helpers ────────────────────────────────────────────────────────
+    @staticmethod
+    def _lerp_colour(c1, c2, t):
+        return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+    def _to_canvas(self, x, y):
+        """World coords → canvas pixel coords (SSAA× resolution)."""
+        sx = x * self._scale + self._offset[0]
+        sy = WINDOW_H - (y * self._scale + self._offset[1])
+        return int(sx * self._SSAA), int(sy * self._SSAA)
 
     def render(self):
         if HEADLESS:
@@ -121,48 +201,131 @@ class RacingEnv(gym.Env):
                 self.close()
                 return
 
-        self._screen.fill((20, 20, 30))
+        S = self._SSAA                   # scale multiplier shorthand
+        cv = self._canvas                # hi-res draw target
 
-        rb = [self._to_screen(*p) for p in self.track.right_bound]
-        lb = [self._to_screen(*p) for p in self.track.left_bound]
+        on_track  = self.track.is_on_track(self.car.x, self.car.y)
+        speed_kmh = self.car.speed * 3.6
+        spd_t     = min(1.0, self.car.speed / MAX_SPEED)
+
+        # Initialise smoothed heading on the very first frame (before rays or car use it)
+        if self._render_heading is None:
+            self._render_heading = self.car.heading
+        self._update_camera_transform()
+
+        # ── 1. Background ─────────────────────────────────────────────────────
+        cv.fill((10, 12, 20))
+
+        # ── 2. Track boundary lists (canvas coords) ───────────────────────────
+        rb = [self._to_canvas(*p) for p in self.track.right_bound]
+        lb = [self._to_canvas(*p) for p in self.track.left_bound]
+
+        # ── 3. Asphalt fill ───────────────────────────────────────────────────
         if len(rb) > 2:
-            pygame.draw.polygon(self._screen, (55, 55, 65), rb + lb[::-1])
-        pygame.draw.lines(self._screen, (210, 210, 210), True, rb, 2)
-        pygame.draw.lines(self._screen, (210, 210, 210), True, lb, 2)
+            pygame.draw.polygon(cv, (38, 38, 52), rb + lb[::-1])
 
-        cl = [self._to_screen(*p) for p in self.track.centerline]
-        for i in range(0, len(cl)-1, 5):
-            pygame.draw.line(self._screen, (70, 70, 110), cl[i], cl[(i+1) % len(cl)], 1)
+        # ── 4. Centerline list ────────────────────────────────────────────────
+        cl = [self._to_canvas(*p) for p in self.track.centerline]
 
-        cx, cy = self._to_screen(self.car.x, self.car.y)
+        # ── 5. Kerb lines — alternating white / red ───────────────────────────
+        kerb_white = (230, 230, 230)
+        kerb_red   = (210,  40,  40)
+        for boundary in (rb, lb):
+            for i in range(len(boundary) - 1):
+                colour = kerb_white if (i // 3) % 2 == 0 else kerb_red
+                pygame.draw.line(cv, colour, boundary[i], boundary[i + 1], S * 2)
+
+        # ── 6. Centerline dashes ──────────────────────────────────────────────
+        for i in range(0, len(cl) - 1, 1):
+            if (i // 4) % 2 == 0:
+                pygame.draw.line(cv, (200, 190, 80), cl[i], cl[i + 1], S)
+
+        # ── 7. Sensor rays — EMA-smoothed endpoints ───────────────────────────
+        # Step 1: compute actual endpoints using smoothed heading (not raw)
+        cx, cy = self._to_canvas(self.car.x, self.car.y)
+        actual_ends = []
         for ang in SENSOR_ANGLES:
-            ra   = self.car.heading + math.radians(ang)
+            ra   = self._render_heading + math.radians(ang)  # smoothed heading
             dist = self.car._cast_ray(ang, self.track)
-            ex, ey = self.car.x + math.cos(ra)*dist, self.car.y + math.sin(ra)*dist
-            esx, esy = self._to_screen(ex, ey)
-            pygame.draw.line(self._screen, (200, 160, 0), (cx, cy), (esx, esy), 1)
-            pygame.draw.circle(self._screen, (255, 220, 0), (esx, esy), 3)
+            actual_ends.append((self.car.x + math.cos(ra) * dist,
+                                 self.car.y + math.sin(ra) * dist))
 
-        h, sz = self.car.heading, self._car_px
-        pts = [
-            (cx + sz   * math.cos(h),        cy - sz   * math.sin(h)),
-            (cx + sz*.6* math.cos(h + 2.4),  cy - sz*.6* math.sin(h + 2.4)),
-            (cx + sz*.6* math.cos(h - 2.4),  cy - sz*.6* math.sin(h - 2.4)),
-        ]
-        pygame.draw.polygon(self._screen, (255, 60, 60), [(int(x), int(y)) for x,y in pts])
-        pygame.draw.circle(self._screen, (255, 255, 255), (cx, cy), 3)
+        # Step 2: EMA-blend endpoints in world space (same alpha as heading)
+        if self._render_ray_ends is None:
+            self._render_ray_ends = actual_ends[:]
+        else:
+            a = self._HEADING_SMOOTH
+            self._render_ray_ends = [
+                (rx + (ax - rx) * a, ry + (ay - ry) * a)
+                for (rx, ry), (ax, ay) in zip(self._render_ray_ends, actual_ends)
+            ]
 
-        on_track = self.track.is_on_track(self.car.x, self.car.y)
-        hud = [
-            f"Speed:    {self.car.speed * 3.6:.1f} km/h",
-            f"Waypoint: {self._prev_waypoint} / {len(self.track.centerline)}",
-            f"Step:     {self._step_count}",
-            f"On track: {on_track}",
-        ]
-        for i, line in enumerate(hud):
-            col = (100,255,100) if (i==3 and on_track) else \
-                  (255,100,100) if (i==3 and not on_track) else (200,200,200)
-            self._screen.blit(self._font.render(line, True, col), (10, 10 + i*20))
+        # Step 3: draw with smoothed endpoints; derive t from smoothed distance
+        self._ray_surf.fill((0, 0, 0, 0))
+        for ex, ey in self._render_ray_ends:
+            esx, esy    = self._to_canvas(ex, ey)
+            smooth_dist = math.hypot(ex - self.car.x, ey - self.car.y)
+            t           = max(0.0, 1.0 - smooth_dist / SENSOR_MAX_DIST)
+            ray_col     = self._lerp_colour((0, 200, 255), (255, 60, 60), t)
+            pygame.draw.line(self._ray_surf, (*ray_col, 90), (cx, cy), (esx, esy), S)
+            dot_r = max(S, int((3 + t * 3) * S))
+            pygame.draw.circle(self._ray_surf, (*ray_col, 160), (esx, esy), dot_r)
+        cv.blit(self._ray_surf, (0, 0))
+
+
+        # ── 8. Car sprite — EMA-smoothed heading, then rotozoom ──────────────
+        actual_h = self.car.heading   # raw physics heading (radians)
+
+        # Shortest angular path (handles 0/2π wrap-around correctly)
+        diff = (actual_h - self._render_heading + math.pi) % (2 * math.pi) - math.pi
+        self._render_heading = (self._render_heading + diff * self._HEADING_SMOOTH) % (2 * math.pi)
+
+        # pygame.transform.rotozoom uses CCW degrees
+        heading_deg = math.degrees(self._render_heading)
+
+        target_w_px = self._car_px * S * 2
+        scale_f     = target_w_px / max(self._car_sprite.get_width(), 1)
+
+        rotated = pygame.transform.rotozoom(self._car_sprite, heading_deg, scale_f)
+        cx, cy  = self._to_canvas(self.car.x, self.car.y)
+        cv.blit(rotated, (cx - rotated.get_width() // 2, cy - rotated.get_height() // 2))
+
+        # ── 9. Downscale canvas → window (this is where the AA happens) ───────
+        pygame.transform.smoothscale(cv, (WINDOW_W, WINDOW_H), self._screen)
+
+        # ── 10. HUD — drawn directly on screen after downscale ────────────────
+        # (Fonts are at display resolution; drawing pre-scale would make them blurry)
+        progress = self._prev_waypoint / max(1, len(self.track.centerline))
+
+        panel_surf = pygame.Surface((230, 108), pygame.SRCALPHA)
+        panel_surf.fill((8, 10, 22, 200))
+        pygame.draw.rect(panel_surf, (60, 60, 120, 180), (0, 0, 230, 108), 1)
+        self._screen.blit(panel_surf, (8, 8))
+
+        title_surf = self._font_lg.render("RL AGENT", True, (140, 140, 255))
+        self._screen.blit(title_surf, (16, 13))
+
+        spd_col  = self._lerp_colour((100, 220, 100), (255, 80, 80), spd_t)
+        self._screen.blit(self._font_lg.render(f"{speed_kmh:5.1f} km/h", True, spd_col), (16, 33))
+
+        bar_x, bar_y, bar_w, bar_h = 16, 54, 210, 8
+        pygame.draw.rect(self._screen, (30, 30, 50), (bar_x, bar_y, bar_w, bar_h), border_radius=4)
+        fill_w = int(bar_w * spd_t)
+        if fill_w > 0:
+            pygame.draw.rect(self._screen, spd_col, (bar_x, bar_y, fill_w, bar_h), border_radius=4)
+
+        self._screen.blit(
+            self._font_sm.render(f"Lap  {self._prev_waypoint:4d}/{len(self.track.centerline)}", True, (180, 180, 220)),
+            (16, 67))
+        pygame.draw.rect(self._screen, (30, 30, 50), (bar_x, 82, bar_w, 6), border_radius=3)
+        prog_w = int(bar_w * progress)
+        if prog_w > 0:
+            pygame.draw.rect(self._screen, (100, 160, 255), (bar_x, 82, prog_w, 6), border_radius=3)
+
+        step_col  = (160, 160, 200)
+        track_col = (80, 255, 120) if on_track else (255, 80, 80)
+        self._screen.blit(self._font_sm.render(f"Step {self._step_count:5d}", True, step_col),   (16,  92))
+        self._screen.blit(self._font_sm.render("ON TRACK" if on_track else "OFF TRACK", True, track_col), (130, 92))
 
         pygame.display.flip()
         self._clock.tick(FPS)
