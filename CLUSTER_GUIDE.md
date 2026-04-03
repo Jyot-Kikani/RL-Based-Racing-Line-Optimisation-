@@ -52,25 +52,41 @@ git checkout <branch-name>
 
 ## 2. Create the Python environment on the cluster
 
-Many clusters expose Python through modules. If yours does, load Python first:
+Your sample job suggests this cluster commonly uses modules plus Conda, so that
+should be the default approach here too.
+
+Load the same style of modules first:
 
 ```bash
-module avail python
-module load python/3.11
+module load anaconda3
+module load gcc-9.5.0
 ```
 
-Then create and activate a virtual environment:
+Then create a Conda environment:
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+conda create -n rl python=3.11 -y
+conda activate rl
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-If your cluster has a dedicated PyTorch install path or a GPU-specific wheel
-requirement, follow your cluster docs for that step before or after
-`requirements.txt`.
+Check the environment path:
+
+```bash
+which python
+```
+
+If the output is something like:
+
+```bash
+/home/<your_username>/.conda/envs/rl/bin/python
+```
+
+that is the path you should use in the Slurm script via `PYTHON_BIN`.
+
+If your cluster prefers `venv`, that still works, but Conda is likely the most
+natural fit given your existing jobs.
 
 ## 3. Sanity-check the install
 
@@ -112,12 +128,19 @@ If the node is strong and stable, test `--n-envs 12` or `--n-envs 16`.
 
 A template is included at `slurm/train_stage.sbatch`.
 
+It follows the same pattern as your existing cluster jobs:
+
+- `cd $SLURM_SUBMIT_DIR`
+- `module load anaconda3`
+- `module load gcc-9.5.0`
+- direct execution through a configured `PYTHON_BIN`
+
 Example submissions:
 
 ```bash
-sbatch --export=ALL,STAGE=1,N_ENVS=8,TIMESTEPS=400000 slurm/train_stage.sbatch
-sbatch --export=ALL,STAGE=2,N_ENVS=8,TIMESTEPS=500000 slurm/train_stage.sbatch
-sbatch --export=ALL,STAGE=3,N_ENVS=8,TIMESTEPS=300000 slurm/train_stage.sbatch
+sbatch --export=ALL,STAGE=1,N_ENVS=8,TIMESTEPS=400000,PYTHON_BIN=$HOME/.conda/envs/rl/bin/python slurm/train_stage.sbatch
+sbatch --export=ALL,STAGE=2,N_ENVS=8,TIMESTEPS=500000,PYTHON_BIN=$HOME/.conda/envs/rl/bin/python slurm/train_stage.sbatch
+sbatch --export=ALL,STAGE=3,N_ENVS=8,TIMESTEPS=300000,PYTHON_BIN=$HOME/.conda/envs/rl/bin/python slurm/train_stage.sbatch
 ```
 
 ## 6. Monitor jobs
@@ -208,7 +231,7 @@ Adjust the remote path if your repo is stored elsewhere on the cluster.
 Use this as your first real submission:
 
 ```bash
-sbatch --export=ALL,STAGE=1,N_ENVS=8,TIMESTEPS=100000 slurm/train_stage.sbatch
+sbatch --export=ALL,STAGE=1,N_ENVS=8,TIMESTEPS=100000,PYTHON_BIN=$HOME/.conda/envs/rl/bin/python slurm/train_stage.sbatch
 ```
 
 That is long enough to expose environment or scaling issues without committing
@@ -222,5 +245,7 @@ an entire overnight allocation.
   unless you also copy checkpoints back before job end.
 - If `n_envs` is too high, throughput can get worse due to process overhead.
   Start at `8`, then benchmark `12` or `16`.
-- If your cluster requires `conda` instead of `venv`, the workflow is the same
-  in spirit: create env, install requirements, then submit the job.
+- The current Slurm template requests `--gres=gpu:1` because your sample job
+  uses that pattern. If GPU queue time is high, you can consider a CPU-only
+  variant later, since this project often benefits strongly from CPU env
+  parallelism.
