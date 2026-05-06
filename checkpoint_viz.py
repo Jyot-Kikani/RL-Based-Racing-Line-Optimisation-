@@ -100,15 +100,16 @@ def _draw_racing_line(ax, track, xs, ys, speeds, title, global_vmin, global_vmax
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def build_evolution_plot(stage: int, max_ckpts: int = 16, make_gif: bool = False):
-    ckpt_dir = os.path.join("models", f"stage{stage}", "checkpoints")
+def build_evolution_plot(stage: int, max_ckpts: int = 16, make_gif: bool = False,
+                         ckpt_dir: str = None):
+    ckpt_dir = ckpt_dir or os.path.join("models", f"stage{stage}", "checkpoints")
     ckpt_files = sorted(
         glob.glob(os.path.join(ckpt_dir, f"stage{stage}_sac_*_steps.zip")),
         key=_checkpoint_step
     )
 
     # Also optionally include best_model for comparison
-    best_path = os.path.join("models", f"stage{stage}", "best_model.zip")
+    best_path = os.path.join(os.path.dirname(ckpt_dir), "best_model.zip")
     if os.path.exists(best_path):
         ckpt_files.append(best_path)
 
@@ -233,6 +234,9 @@ if __name__ == "__main__":
                         help="Max checkpoints to include in the grid (default: 16)")
     parser.add_argument("--gif",       action="store_true",
                         help="Also produce an animated GIF (requires imageio)")
+    parser.add_argument("--ckpt-dir",  default=None,
+                        help="Optional directory containing checkpoint zips for this stage.")
     args = parser.parse_args()
 
-    build_evolution_plot(args.stage, max_ckpts=args.max_ckpts, make_gif=args.gif)
+    build_evolution_plot(args.stage, max_ckpts=args.max_ckpts,
+                         make_gif=args.gif, ckpt_dir=args.ckpt_dir)

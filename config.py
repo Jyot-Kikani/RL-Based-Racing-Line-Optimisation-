@@ -3,7 +3,7 @@
 # Import this everywhere instead of hardcoding values.
 
 # ── Track ─────────────────────────────────────────────────────────────────────
-TRACK_FILE      = "data/tracks/f1.csv"   # path to TUMFTM CSV
+TRACK_FILE      = "data/tracks/drag_strip.csv"   # path to TUMFTM CSV
 TRACK_SCALE     = 1.0                        # metres per unit (TUMFTM is already in m)
 
 # ── Car physics ───────────────────────────────────────────────────────────────
