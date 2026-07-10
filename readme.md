@@ -23,6 +23,17 @@ The focus is not photorealistic simulation, but building an explainable and exte
 
 ---
 
+# Visuals
+
+| Manual Driving Mode | Training Checkpoint Evolution | Spline Track Builder |
+| :---: | :---: | :---: |
+| ![Manual Driving Mode](Screenshots/ManualMode.png) | ![Training Checkpoint Evolution](Screenshots/TrainingEvolution.png) | ![Spline Track Builder](Screenshots/TrackBuilder.png) |
+
+### Checkpoint Evolution (Stage 1 Video)
+<video src="outputs/plots/checkpoint_montage_stage1.mp4" controls width="100%"></video>
+
+---
+
 # Features
 
 * 7-ray sensor observation model
