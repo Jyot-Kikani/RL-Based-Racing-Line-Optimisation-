@@ -8,6 +8,15 @@ Reinforcement learning agent that learns an optimal racing line on real F1 circu
 - **Track data**: TUMFTM racetrack database (real F1 circuits)
 - **Rendering**: Pygame
 
+## Visuals
+
+| Manual Driving Mode | Training Checkpoint Evolution | Spline Track Builder |
+| :---: | :---: | :---: |
+| ![Manual Driving Mode](Screenshots/ManualMode.png) | ![Training Checkpoint Evolution](Screenshots/TrainingEvolution.png) | ![Spline Track Builder](Screenshots/TrackBuilder.png) |
+
+### Checkpoint Evolution (Stage 1 Video)
+<video src="outputs/plots/checkpoint_montage_stage1.mp4" controls width="100%"></video>
+
 ## Setup
 
 ```bash
