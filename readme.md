@@ -30,7 +30,7 @@ The focus is not photorealistic simulation, but building an explainable and exte
 | ![Manual Driving Mode](Screenshots/ManualMode.png) | ![Training Checkpoint Evolution](Screenshots/TrainingEvolution.png) | ![Spline Track Builder](Screenshots/TrackBuilder.png) |
 
 ### Checkpoint Evolution (Stage 1 Video)
-<video src="outputs/plots/checkpoint_montage_stage1.mp4" controls width="100%"></video>
+<video src="https://github.com/user-attachments/assets/216624c0-11aa-4882-8f3d-89b0f41e8b89" controls width="100%"></video>
 
 ---
 
